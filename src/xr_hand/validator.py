@@ -3,11 +3,15 @@
 Errors  -> packet is unusable, drop it.
 Warnings -> packet is usable but something looks off (log it).
 
-Checks:
+Per-packet checks done by `validate_raw_message`:
   - exact length == 187
   - no NaN / inf
-  - packet counter advanced by 1 (warn on freeze / backwards / drop)
   - per joint: not all-zero, quaternion magnitude ~ 1
+
+Cross-packet (stream-level) checks done by `StreamMonitor`:
+  - persistent counter freeze (default: 20+ identical values in a row)
+  - large counter gap (default: 10+ missed ticks)
+  - counter going backwards
 """
 from dataclasses import dataclass, field
 from typing import List, Optional, Sequence
@@ -36,6 +40,13 @@ ZERO_EPSILON = 1e-6
 def validate_raw_message(
     values: Sequence[float], prev_counter: Optional[int] = None
 ) -> ValidationResult:
+    """Per-packet structural validation. Use StreamMonitor for counter checks.
+
+    prev_counter is accepted for backward compatibility but ignored. Counter
+    behaviour is now tracked by StreamMonitor since real-device tick counters
+    legitimately repeat and skip within batched emissions.
+    """
+    del prev_counter  # intentionally unused
     result = ValidationResult(is_valid=True)
 
     if len(values) != EXPECTED_VALUE_COUNT:
@@ -51,21 +62,6 @@ def validate_raw_message(
         more = "..." if len(nan_idx) > 10 else ""
         result.errors.append(f"non-finite values at indices {preview}{more}")
         result.is_valid = False
-        # don't bail — still run counter check below
-
-    counter = int(values[1]) if math.isfinite(values[1]) else -1
-    if prev_counter is not None and counter >= 0:
-        if counter == prev_counter:
-            result.warnings.append(f"packet counter frozen at {counter}")
-        elif counter < prev_counter:
-            result.warnings.append(
-                f"packet counter went backwards: {prev_counter} -> {counter}"
-            )
-        elif counter > prev_counter + 1:
-            dropped = counter - prev_counter - 1
-            result.warnings.append(
-                f"packet counter jumped: {prev_counter} -> {counter} (dropped {dropped})"
-            )
 
     for j in range(JOINT_COUNT):
         base = HEADER_LEN + j * VALUES_PER_JOINT
@@ -85,3 +81,67 @@ def validate_raw_message(
                 )
 
     return result
+
+
+class StreamMonitor:
+    """Tracks counter behaviour across packets for ONE hand.
+
+    Real-device tick counters batch: the same value can repeat in consecutive
+    packets (when one tick spans multiple OSC messages) and small skips happen
+    (some ticks emit no kinematic frame). Only persistent freezes and large
+    gaps are real problems.
+
+    Defaults assume ~100 Hz packet rate. Adjust thresholds if your stream
+    rate is very different.
+    """
+
+    def __init__(
+        self,
+        name: str = "",
+        freeze_threshold: int = 20,
+        drop_threshold: int = 10,
+    ):
+        self.name = name
+        self.freeze_threshold = freeze_threshold
+        self.drop_threshold = drop_threshold
+        self.prev_counter: Optional[int] = None
+        self.repeat_streak = 0
+        self.in_freeze = False
+        self.packets_seen = 0
+
+    def update(self, counter: int) -> List[str]:
+        warnings: List[str] = []
+        self.packets_seen += 1
+
+        if self.prev_counter is None:
+            self.prev_counter = counter
+            return warnings
+
+        if counter == self.prev_counter:
+            self.repeat_streak += 1
+            if self.repeat_streak == self.freeze_threshold and not self.in_freeze:
+                warnings.append(
+                    f"counter frozen at {counter} for {self.repeat_streak}+ packets"
+                )
+                self.in_freeze = True
+        elif counter < self.prev_counter:
+            warnings.append(
+                f"counter went backwards: {self.prev_counter} -> {counter}"
+            )
+            self.repeat_streak = 0
+            self.in_freeze = False
+        else:
+            if self.in_freeze:
+                warnings.append(
+                    f"counter resumed: {self.prev_counter} -> {counter}"
+                )
+                self.in_freeze = False
+            skipped = counter - self.prev_counter - 1
+            if skipped >= self.drop_threshold:
+                warnings.append(
+                    f"counter jumped: {self.prev_counter} -> {counter} (dropped {skipped})"
+                )
+            self.repeat_streak = 0
+
+        self.prev_counter = counter
+        return warnings

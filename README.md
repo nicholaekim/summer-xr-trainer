@@ -62,9 +62,49 @@ tests/
   test_pipeline.py
 ```
 
+## Phase 2: OSC pipeline (no gloves required)
+
+Same downstream pipeline (validator -> parser -> viewer), but the source is a
+real UDP/OSC socket instead of the in-process mock generator.
+
+**Two-terminal test (no hardware):**
+
+Terminal A — pretend to be XR Trainer:
+```powershell
+.\.venv\Scripts\Activate.ps1
+python scripts/mock_osc_sender.py
+```
+
+Terminal B — run the receiver + viewer:
+```powershell
+.\.venv\Scripts\Activate.ps1
+python scripts/run_osc.py
+```
+
+You should see the same two hands animating in 3D. Stop with Ctrl+C in
+terminal A or close the viewer window.
+
+**Inject faults over the wire** (sender side):
+```powershell
+python scripts/mock_osc_sender.py --fault wrong_length
+python scripts/mock_osc_sender.py --fault freeze_counter
+python scripts/mock_osc_sender.py --fault zero_joint
+python scripts/mock_osc_sender.py --fault random_missing
+```
+Watch the receiver terminal — same warnings/errors as the in-process mock.
+
+**Diagnose a real XR Trainer stream** (when gloves arrive):
+```powershell
+python scripts/run_osc.py --dump --no-viz
+```
+Prints one log line per OSC packet (address, arg count, first 5 values). Use
+this to confirm XR Trainer's actual address pattern and arg count before
+trusting the visualization. If the address differs from `/hand/left` and
+`/hand/right`, pass `--left-addr` / `--right-addr`. If the port differs from
+9000, pass `--port`.
+
 ## What's next (not built yet)
 
-- `src/xr_hand/receiver.py` + `scripts/run_osc.py` — real OSC ingest.
 - `src/xr_hand/recorder.py` — record validated frames to JSONL, replay through
   the same viewer.
 - Unity bridge — the `HandFrame` dataclass is already the natural wire format.

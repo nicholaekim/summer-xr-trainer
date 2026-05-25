@@ -7,7 +7,7 @@ import logging
 
 from xr_hand.mock import MockHandGenerator
 from xr_hand.parser import parse_hand_message
-from xr_hand.validator import validate_raw_message
+from xr_hand.validator import StreamMonitor, validate_raw_message
 from xr_hand.viz3d import HandViewer
 
 logging.basicConfig(
@@ -28,21 +28,25 @@ right_gen = MockHandGenerator(hand="right")
 # right_gen.random_missing_prob = 0.005
 # -------------------------------------------------------------------------
 
-prev_counter = {"left": None, "right": None}
+monitors = {
+    "left":  StreamMonitor("left",  freeze_threshold=2, drop_threshold=2),
+    "right": StreamMonitor("right", freeze_threshold=2, drop_threshold=2),
+}
 viewer = HandViewer(title="XR Hand (mock)")
 
 
 def tick() -> None:
     for gen in (left_gen, right_gen):
         raw = gen.next_frame()
-        result = validate_raw_message(raw, prev_counter[gen.hand])
+        result = validate_raw_message(raw)
         if not result.is_valid:
             log.warning("[%s] INVALID: %s", gen.hand, "; ".join(result.errors))
             continue
         for w in result.warnings:
             log.warning("[%s] %s", gen.hand, w)
         frame = parse_hand_message(raw, hand_side_hint=gen.hand)
-        prev_counter[gen.hand] = frame.packet_counter
+        for w in monitors[gen.hand].update(frame.packet_counter):
+            log.warning("[%s] %s", gen.hand, w)
         if frame.packet_counter % 60 == 0:
             log.info(
                 "[%s] counter=%d t=%.2fs joints=%d",

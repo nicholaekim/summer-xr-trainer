@@ -1,11 +1,11 @@
 """Parse a raw 187-value OSC payload into a HandFrame.
 
-Header layout assumed (until confirmed against real Open SDK stream):
-    [0] timestamp (seconds, float)
-    [1] packet counter (int)
-    [2] hand side code (0 = left, 1 = right)
-    [3] frame id (int)
-    [4] status flag (int)
+Header layout (confirmed against XR Trainer real-glove stream):
+    [0] tick counter (int)       -> packet_counter (used for frozen-counter detection)
+    [1] frame id (int)
+    [2] status / hand code (int)
+    [3] device-label string      -> replaced with 0.0 in receiver (hand_side comes from hint)
+    [4] device-family string     -> replaced with 0.0 in receiver
 Followed by 26 joints x [x, y, z, qw, qx, qy, qz].
 """
 from typing import Optional, Sequence
@@ -33,17 +33,25 @@ def parse_hand_message(
             f"expected {EXPECTED_VALUE_COUNT} values, got {len(values)}"
         )
 
-    timestamp = float(values[0])
-    packet_counter = int(values[1])
-    side_code = int(values[2])
-    frame_id = int(values[3])
-    status = int(values[4])
-    hand_side = hand_side_hint or ("right" if side_code == 1 else "left")
+    packet_counter = int(values[0])
+    timestamp = float(values[0])  # tick counter doubles as time-like
+    frame_id = int(values[1])
+    status = int(values[2])
+    # Positions [3], [4] are string placeholders (replaced with 0.0 in receiver).
+    # hand_side must come from the caller (receiver extracted it from device label).
+    if hand_side_hint is None:
+        raise PacketParseError(
+            "hand_side_hint required: real-glove stream encodes hand in a string "
+            "header field that the receiver normalises away"
+        )
+    hand_side = hand_side_hint
 
     joints = []
     for j in range(JOINT_COUNT):
         base = HEADER_LEN + j * VALUES_PER_JOINT
-        x, y, z, qw, qx, qy, qz = values[base : base + VALUES_PER_JOINT]
+        # Wire order is XYZW (confirmed against XR Trainer kinematic stream):
+        # cols [3,4,5,6] = qx, qy, qz, qw with magnitude == 1.000.
+        x, y, z, qx, qy, qz, qw = values[base : base + VALUES_PER_JOINT]
         joints.append(
             Joint(
                 name=JOINT_NAMES[j],

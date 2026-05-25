@@ -12,6 +12,7 @@ from matplotlib.animation import FuncAnimation
 from mpl_toolkits.mplot3d.art3d import Line3D, Path3DCollection  # noqa: F401
 
 from .joints import BONES, HandFrame, JOINT_COUNT
+from .kinematics import forward_kinematics
 
 
 _HAND_COLORS = {"left": "tab:blue", "right": "tab:red"}
@@ -56,9 +57,10 @@ class HandViewer:
     def update_hand(self, frame: HandFrame) -> None:
         hand = frame.hand_side
         self._ensure_hand(hand)
-        xs = [j.x for j in frame.joints]
-        ys = [j.y for j in frame.joints]
-        zs = [j.z for j in frame.joints]
+        positions = forward_kinematics(frame)
+        xs = [p[0] for p in positions]
+        ys = [p[1] for p in positions]
+        zs = [p[2] for p in positions]
         self._scatters[hand]._offsets3d = (xs, ys, zs)
         for ln, (a, b) in zip(self._bones[hand], BONES):
             ln.set_data_3d([xs[a], xs[b]], [ys[a], ys[b]], [zs[a], zs[b]])

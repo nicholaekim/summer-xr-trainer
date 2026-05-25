@@ -1,10 +1,15 @@
 """Mock hand-frame generator.
 
-Produces the same 187-value list the OSC receiver will deliver, so the rest of
-the pipeline (validate -> parse -> viz) is exercised exactly like production.
+Produces the same 187-value list the OSC receiver will deliver, in the SAME
+canonical wire layout the real glove uses:
+  - per-joint translation is parent-relative (local space)
+  - per-joint quaternion is XYZW
+
+The rest of the pipeline (validate -> parse -> FK -> viz) is exercised
+exactly like production.
 
 Fault toggles let you inject the failure modes you care about:
-  - stuck_fingertip:        one tip stops moving
+  - stuck_fingertip:        one tip stops moving (frozen local offset)
   - freeze_counter:         packet counter never increments
   - zero_joint:             one joint becomes all zeros
   - wrong_length:           payload truncated by one value
@@ -17,37 +22,56 @@ from typing import List, Optional
 from .joints import HEADER_LEN, JOINT_NAMES
 
 
-def _rest_positions() -> dict:
-    """Approximate rest pose for the right hand, units in meters.
+def _local_rest_positions() -> dict:
+    """Per-joint translation relative to parent at rest pose (right hand).
 
-    +X = pinky direction, +Y = fingertip direction, +Z = palm-up direction.
-    Mirrored for the left hand by negating X.
+    Conventions for the mock (independent of whatever the real glove uses):
+      +X = pinky direction across the palm
+      +Y = fingertip direction
+      +Z = palm-up
+    Left hand mirrors finger spread by negating the X component on metacarpals.
     """
-    base_x = {"THUMB": -0.04, "INDEX": -0.025, "MIDDLE": 0.0, "RING": 0.025, "LITTLE": 0.045}
-    # cumulative Y offsets for [METACARPAL, PROXIMAL, INTERMEDIATE, DISTAL, TIP]
-    chains = {
-        "THUMB":  [0.03, 0.07, 0.10, 0.12],                  # 4-joint chain
-        "INDEX":  [0.07, 0.11, 0.135, 0.155, 0.170],
-        "MIDDLE": [0.075, 0.12, 0.15, 0.172, 0.190],
-        "RING":   [0.07, 0.11, 0.138, 0.158, 0.175],
-        "LITTLE": [0.065, 0.095, 0.117, 0.135, 0.150],
+    return {
+        "WRIST":              (0.0,    0.0,   0.0),
+        "PALM":               (0.0,    0.04,  0.0),
+        # Metacarpals: offset from wrist with finger spread
+        "THUMB_METACARPAL":   (-0.04,  0.03,  0.0),
+        "INDEX_METACARPAL":   (-0.025, 0.07,  0.0),
+        "MIDDLE_METACARPAL":  (0.0,    0.075, 0.0),
+        "RING_METACARPAL":    (0.025,  0.07,  0.0),
+        "LITTLE_METACARPAL":  (0.045,  0.065, 0.0),
+        # Phalanges: extend +Y from parent (bone length only)
+        "THUMB_PROXIMAL":     (0.0, 0.04,  0.0),
+        "THUMB_DISTAL":       (0.0, 0.03,  0.0),
+        "THUMB_TIP":          (0.0, 0.025, 0.0),
+        "INDEX_PROXIMAL":     (0.0, 0.04,  0.0),
+        "INDEX_INTERMEDIATE": (0.0, 0.025, 0.0),
+        "INDEX_DISTAL":       (0.0, 0.02,  0.0),
+        "INDEX_TIP":          (0.0, 0.015, 0.0),
+        "MIDDLE_PROXIMAL":     (0.0, 0.045, 0.0),
+        "MIDDLE_INTERMEDIATE": (0.0, 0.03,  0.0),
+        "MIDDLE_DISTAL":       (0.0, 0.022, 0.0),
+        "MIDDLE_TIP":          (0.0, 0.018, 0.0),
+        "RING_PROXIMAL":     (0.0, 0.04,  0.0),
+        "RING_INTERMEDIATE": (0.0, 0.028, 0.0),
+        "RING_DISTAL":       (0.0, 0.02,  0.0),
+        "RING_TIP":          (0.0, 0.015, 0.0),
+        "LITTLE_PROXIMAL":     (0.0, 0.03,  0.0),
+        "LITTLE_INTERMEDIATE": (0.0, 0.022, 0.0),
+        "LITTLE_DISTAL":       (0.0, 0.018, 0.0),
+        "LITTLE_TIP":          (0.0, 0.015, 0.0),
     }
-    suffixes = {
-        "THUMB":  ["METACARPAL", "PROXIMAL", "DISTAL", "TIP"],
-        "INDEX":  ["METACARPAL", "PROXIMAL", "INTERMEDIATE", "DISTAL", "TIP"],
-        "MIDDLE": ["METACARPAL", "PROXIMAL", "INTERMEDIATE", "DISTAL", "TIP"],
-        "RING":   ["METACARPAL", "PROXIMAL", "INTERMEDIATE", "DISTAL", "TIP"],
-        "LITTLE": ["METACARPAL", "PROXIMAL", "INTERMEDIATE", "DISTAL", "TIP"],
-    }
-    pos = {"WRIST": (0.0, 0.0, 0.0), "PALM": (0.0, 0.04, 0.0)}
-    for finger, ys in chains.items():
-        for suffix, y in zip(suffixes[finger], ys):
-            pos[f"{finger}_{suffix}"] = (base_x[finger], y, 0.0)
-    return pos
 
 
-_REST = _rest_positions()
-_DEPTH = {"METACARPAL": 0, "PROXIMAL": 1, "INTERMEDIATE": 2, "DISTAL": 3, "TIP": 4}
+_REST = _local_rest_positions()
+_PHALANX_SUFFIXES = ("_PROXIMAL", "_INTERMEDIATE", "_DISTAL", "_TIP")
+_IDENTITY_QUAT = (0.0, 0.0, 0.0, 1.0)  # XYZW
+
+
+def _rotx_quat(angle: float) -> tuple:
+    """XYZW quaternion for rotation around +X by `angle` radians."""
+    h = angle * 0.5
+    return (math.sin(h), 0.0, 0.0, math.cos(h))
 
 
 class MockHandGenerator:
@@ -58,7 +82,7 @@ class MockHandGenerator:
         self.frame_id = 0
         self.t = 0.0
         self.dt = 1.0 / 60.0
-        # Place each hand's wrist offset along X so left/right don't overlap.
+        # Place each hand's wrist along X so left/right don't overlap.
         self.origin_offset = (0.12 if hand == "right" else -0.12, 0.0, 0.0)
 
         # fault toggles (default: clean stream)
@@ -67,8 +91,7 @@ class MockHandGenerator:
         self.zero_joint: Optional[str] = None
         self.wrong_length: bool = False
         self.random_missing_prob: float = 0.0
-
-        self._frozen_positions: dict = {}
+        self._frozen_local: dict = {}
 
     def next_frame(self) -> List[float]:
         self.t += self.dt
@@ -76,44 +99,50 @@ class MockHandGenerator:
             self.counter += 1
         self.frame_id += 1
 
-        # 0..1 curl driven by a slow sine
+        # 0..1 curl driven by a slow sine; 0 = open hand, 1 = closed fist
         curl = 0.5 * (1 - math.cos(self.t * 1.5))
-        side_code = 1 if self.hand == "right" else 0
+        # Negative angle so fingers curl toward -Z (toward palm) given our +Y bone axis
+        curl_quat = _rotx_quat(-curl * math.pi / 4)
 
+        # Header matches the real XR Trainer kinematic stream layout:
+        # [counter, frame_id, status, str-placeholder, str-placeholder]
         values: List[float] = [
-            self.t,
             float(self.counter),
-            float(side_code),
             float(self.frame_id),
+            1.0,
+            0.0,
             0.0,
         ]
 
         for name in JOINT_NAMES:
-            bx, by, bz = _REST[name]
-            depth = 0
-            for prefix in ("THUMB", "INDEX", "MIDDLE", "RING", "LITTLE"):
-                if name.startswith(prefix + "_"):
-                    depth = _DEPTH.get(name.split("_", 1)[1], 0)
-                    break
+            local = _REST[name]
 
-            # curl: deeper finger joints drop in Z and pull back in Y.
-            # For the left hand, mirror the finger spread across the wrist
-            # before applying the global offset (so the thumb stays on the
-            # correct anatomical side).
-            local_x = bx if self.hand == "right" else -bx
-            x = local_x + self.origin_offset[0]
-            y = by + self.origin_offset[1] - 0.015 * depth * curl
-            z = bz + self.origin_offset[2] - 0.018 * depth * curl
+            # Decide rotation: phalanges curl, everyone else is identity.
+            is_phalanx = any(name.endswith(s) for s in _PHALANX_SUFFIXES)
+            qx, qy, qz, qw = curl_quat if is_phalanx else _IDENTITY_QUAT
+
+            # Decide position
+            if name == "WRIST":
+                # Apply hand offset at the root only; FK propagates it.
+                x, y, z = self.origin_offset
+            elif name.endswith("_METACARPAL"):
+                # Mirror finger spread for left hand
+                px, py, pz = local
+                x = -px if self.hand == "left" else px
+                y, z = py, pz
+            else:
+                x, y, z = local
 
             if self.stuck_fingertip == name:
-                if name not in self._frozen_positions:
-                    self._frozen_positions[name] = (x, y, z)
-                x, y, z = self._frozen_positions[name]
+                if name not in self._frozen_local:
+                    self._frozen_local[name] = (x, y, z)
+                x, y, z = self._frozen_local[name]
 
             if self.zero_joint == name:
                 values.extend([0.0] * 7)
             else:
-                values.extend([x, y, z, 1.0, 0.0, 0.0, 0.0])
+                # Wire order: [x, y, z, qx, qy, qz, qw]
+                values.extend([x, y, z, qx, qy, qz, qw])
 
         if self.wrong_length:
             values.pop()

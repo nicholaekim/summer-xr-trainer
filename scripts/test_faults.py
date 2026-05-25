@@ -1,133 +1,99 @@
 """Headless fault-injection verification.
 
-For each fault toggle, runs the mock generator through the validator for N
-frames and prints the first error/warning produced. Lets you confirm the
-pipeline reacts to bad data without launching the GUI.
+For each fault toggle, runs the mock generator through the validator (and
+StreamMonitor where relevant) for N frames and reports whether the expected
+error/warning fired.
 """
-from typing import Callable, Optional
-
 from xr_hand.mock import MockHandGenerator
-from xr_hand.validator import validate_raw_message
+from xr_hand.validator import StreamMonitor, validate_raw_message
 
 FRAMES = 60
 
 
-def run_case(
-    name: str,
-    configure: Callable[[MockHandGenerator], None],
-    look_for: str,
-    in_errors: bool = False,
-) -> bool:
-    gen = MockHandGenerator(hand="right")
-    configure(gen)
-    prev: Optional[int] = None
-    saw = None
-    for _ in range(FRAMES):
-        raw = gen.next_frame()
-        r = validate_raw_message(raw, prev)
-        # When length is wrong values[1] is still readable, but for total
-        # safety just guard the indexing.
-        try:
-            prev = int(raw[1])
-        except (IndexError, ValueError):
-            pass
-        pool = r.errors if in_errors else r.warnings
-        for msg in pool:
-            if look_for in msg:
-                saw = msg
-                break
-        if saw:
-            break
-    ok = saw is not None
-    status = "PASS" if ok else "FAIL"
-    print(f"[{status}] {name}")
-    print(f"         expected {'error' if in_errors else 'warning'} containing: {look_for!r}")
-    print(f"         got:      {saw!r}")
+def report(name: str, ok: bool, detail: str) -> bool:
+    print(f"[{'PASS' if ok else 'FAIL'}] {name}")
+    print(f"         {detail}")
     return ok
-
-
-cases = [
-    (
-        "clean stream (control)",
-        lambda g: None,
-        None,  # we check this one specially
-        False,
-    ),
-    (
-        "stuck_fingertip",
-        lambda g: setattr(g, "stuck_fingertip", "INDEX_TIP"),
-        # No log expected for stuck fingertip — that's a visual-only fault.
-        # We still want the stream to remain valid.
-        None,
-        False,
-    ),
-    (
-        "freeze_counter",
-        lambda g: setattr(g, "freeze_counter", True),
-        "frozen",
-        False,
-    ),
-    (
-        "zero_joint",
-        lambda g: setattr(g, "zero_joint", "MIDDLE_PROXIMAL"),
-        "MIDDLE_PROXIMAL",
-        False,
-    ),
-    (
-        "wrong_length",
-        lambda g: setattr(g, "wrong_length", True),
-        "length mismatch",
-        True,
-    ),
-    (
-        "random_missing_prob",
-        lambda g: setattr(g, "random_missing_prob", 0.01),
-        "non-finite",
-        True,
-    ),
-]
 
 
 def check_clean_stream() -> bool:
     gen = MockHandGenerator(hand="right")
-    prev: Optional[int] = None
+    mon = StreamMonitor("right", freeze_threshold=2, drop_threshold=2)
     for _ in range(FRAMES):
         raw = gen.next_frame()
-        r = validate_raw_message(raw, prev)
+        r = validate_raw_message(raw)
         if not r.is_valid or r.warnings:
-            print(f"[FAIL] clean stream: unexpected validation noise: "
-                  f"errors={r.errors} warnings={r.warnings}")
-            return False
-        prev = int(raw[1])
-    print("[PASS] clean stream (control)")
-    print("         no errors, no warnings over 60 frames")
-    return True
+            return report("clean stream", False,
+                          f"unexpected: errors={r.errors} warnings={r.warnings}")
+        if mon.update(int(raw[0])):
+            return report("clean stream", False, "monitor flagged a clean stream")
+    return report("clean stream", True, f"no errors/warnings over {FRAMES} frames")
 
 
 def check_stuck_fingertip_stays_valid() -> bool:
     gen = MockHandGenerator(hand="right")
     gen.stuck_fingertip = "INDEX_TIP"
-    prev: Optional[int] = None
     for _ in range(FRAMES):
         raw = gen.next_frame()
-        r = validate_raw_message(raw, prev)
-        if not r.is_valid:
-            print(f"[FAIL] stuck_fingertip: stream went invalid: {r.errors}")
-            return False
-        prev = int(raw[1])
-    print("[PASS] stuck_fingertip (visual-only — stream stays valid)")
-    print("         no errors raised; verify visually in viewer")
-    return True
+        if not validate_raw_message(raw).is_valid:
+            return report("stuck_fingertip", False, "stream went invalid")
+    return report("stuck_fingertip", True, "stream stays valid (visual-only fault)")
+
+
+def check_freeze_counter() -> bool:
+    gen = MockHandGenerator(hand="right")
+    gen.freeze_counter = True
+    mon = StreamMonitor("right", freeze_threshold=3, drop_threshold=10)
+    warnings = []
+    for _ in range(FRAMES):
+        raw = gen.next_frame()
+        warnings.extend(mon.update(int(raw[0])))
+    hit = next((w for w in warnings if "frozen" in w), None)
+    return report("freeze_counter", hit is not None, f"got: {hit!r}")
+
+
+def check_zero_joint() -> bool:
+    gen = MockHandGenerator(hand="right")
+    gen.zero_joint = "MIDDLE_PROXIMAL"
+    raw = gen.next_frame()
+    r = validate_raw_message(raw)
+    hit = next((w for w in r.warnings if "MIDDLE_PROXIMAL" in w), None)
+    return report("zero_joint", hit is not None, f"got: {hit!r}")
+
+
+def check_wrong_length() -> bool:
+    gen = MockHandGenerator(hand="right")
+    gen.wrong_length = True
+    raw = gen.next_frame()
+    r = validate_raw_message(raw)
+    hit = next((e for e in r.errors if "length mismatch" in e), None)
+    return report("wrong_length", hit is not None, f"got: {hit!r}")
+
+
+def check_random_missing() -> bool:
+    gen = MockHandGenerator(hand="right")
+    gen.random_missing_prob = 0.01
+    hit = None
+    for _ in range(FRAMES):
+        raw = gen.next_frame()
+        r = validate_raw_message(raw)
+        for e in r.errors:
+            if "non-finite" in e:
+                hit = e
+                break
+        if hit:
+            break
+    return report("random_missing", hit is not None, f"got: {hit!r}")
 
 
 if __name__ == "__main__":
-    results = []
-    results.append(check_clean_stream())
-    print()
-    results.append(check_stuck_fingertip_stays_valid())
-    print()
-    for name, cfg, needle, in_err in cases[2:]:
-        results.append(run_case(name, cfg, needle, in_err))
-        print()
+    results = [
+        check_clean_stream(),
+        check_stuck_fingertip_stays_valid(),
+        check_freeze_counter(),
+        check_zero_joint(),
+        check_wrong_length(),
+        check_random_missing(),
+    ]
     print("=" * 50)
     print(f"  {sum(results)}/{len(results)} checks passed")

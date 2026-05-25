@@ -2,7 +2,7 @@
 from xr_hand.joints import EXPECTED_VALUE_COUNT
 from xr_hand.mock import MockHandGenerator
 from xr_hand.parser import PacketParseError, parse_hand_message
-from xr_hand.validator import validate_raw_message
+from xr_hand.validator import StreamMonitor, validate_raw_message
 
 
 def test_clean_mock_packet_is_valid():
@@ -23,13 +23,32 @@ def test_wrong_length_is_error():
     assert any("length mismatch" in e for e in result.errors)
 
 
-def test_frozen_counter_warns():
+def test_frozen_counter_warns_via_stream_monitor():
     gen = MockHandGenerator(hand="right")
     gen.freeze_counter = True
-    raw1 = gen.next_frame()
-    raw2 = gen.next_frame()
-    result = validate_raw_message(raw2, prev_counter=int(raw1[1]))
-    assert any("frozen" in w for w in result.warnings)
+    mon = StreamMonitor("right", freeze_threshold=3, drop_threshold=10)
+    warnings = []
+    for _ in range(5):
+        raw = gen.next_frame()
+        warnings.extend(mon.update(int(raw[0])))
+    assert any("frozen" in w for w in warnings)
+
+
+def test_stream_monitor_ignores_normal_batching():
+    """Single repeats and small skips (real-device behaviour) should not warn."""
+    mon = StreamMonitor("test", freeze_threshold=20, drop_threshold=10)
+    sequence = [100, 100, 101, 102, 102, 103, 105, 105, 106]
+    warnings = []
+    for c in sequence:
+        warnings.extend(mon.update(c))
+    assert warnings == []
+
+
+def test_stream_monitor_flags_backwards():
+    mon = StreamMonitor("test")
+    mon.update(100)
+    warnings = mon.update(50)
+    assert any("backwards" in w for w in warnings)
 
 
 def test_zero_joint_warns():
