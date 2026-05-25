@@ -1,0 +1,14 @@
+README.md
+pyproject.toml
+src/xr_hand/__init__.py
+src/xr_hand/joints.py
+src/xr_hand/mock.py
+src/xr_hand/parser.py
+src/xr_hand/validator.py
+src/xr_hand/viz3d.py
+src/xr_hand.egg-info/PKG-INFO
+src/xr_hand.egg-info/SOURCES.txt
+src/xr_hand.egg-info/dependency_links.txt
+src/xr_hand.egg-info/requires.txt
+src/xr_hand.egg-info/top_level.txt
+tests/test_pipeline.py

@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(where python *)",
+      "Bash(.\\\\.venv\\\\Scripts\\\\python.exe -m pytest -q)",
+      "PowerShell(.\\\\.venv\\\\Scripts\\\\python.exe -m pytest -q)"
+    ]
+  }
+}
