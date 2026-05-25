@@ -1,10 +1,8 @@
 # XR Trainer / StretchSense glove pipeline
 
-Real-time pipeline: **glove -> XR Trainer -> Open SDK -> Python OSC -> validate -> parse -> 3D viz**.
+Real-time pipeline: **glove → XR Trainer → OSC (UDP) → validate → parse → 3D viz → record → CSV export**.
 
-Phase 1 (this commit) runs the whole downstream pipeline against a mock
-generator so you can develop and debug without hardware. Phase 2 adds the OSC
-receiver in front; nothing downstream changes.
+26 joints per hand (OpenXR `XR_HAND_JOINT` layout), each with local position + quaternion, captured at ~60 Hz.
 
 ## Install (Windows / PowerShell)
 
@@ -18,30 +16,43 @@ pip install -e ".[dev]"
 If `Activate.ps1` is blocked, run once per machine:
 `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`.
 
-## Run the mock pipeline
+## Daily use (real glove)
 
+With XR Trainer running and the glove streaming on `127.0.0.1:9002`:
+
+**One-command record + playback + export** (recommended):
 ```powershell
-python scripts/run_mock.py
+.\scripts\record_and_export.ps1               # 10 s default
+.\scripts\record_and_export.ps1 -Duration 30  # 30 s
+```
+Produces `recordings\realglove_YYYYMMDD_HHMMSS.jsonl` and `.csv`.
+
+**Just the live viewer** (no recording):
+```powershell
+python scripts/run_osc.py
 ```
 
-You should see an interactive 3D window with a blue (left) and red (right)
-hand skeleton slowly opening and closing. Click-drag rotates, scroll zooms.
-Log lines print every 60 frames per hand.
+**Live viewer + record** (no auto-close, close the window when done):
+```powershell
+python scripts/run_osc.py --record recordings/my_session.jsonl
+```
 
-## Inject faults
+**Diagnose a stream** (raw packet log, no viewer):
+```powershell
+python scripts/run_osc.py --dump --no-viz
+```
 
-Open `scripts/run_mock.py` and uncomment any line in the FAULT INJECTION
-block. Each one should produce specific log warnings or errors:
+## Without the glove (mock pipeline)
 
-| toggle                          | expected log                                 |
-| ------------------------------- | -------------------------------------------- |
-| `stuck_fingertip = "INDEX_TIP"` | (visual only) tip stops moving               |
-| `freeze_counter = True`         | `packet counter frozen at N`                 |
-| `zero_joint = "..."`            | `joint ... is all-zero`                      |
-| `wrong_length = True`           | `INVALID: length mismatch...`                |
-| `random_missing_prob = 0.005`   | `INVALID: non-finite values at indices ...`  |
+```powershell
+python scripts/run_mock.py                                  # animated mock viewer
+python scripts/record.py --mock --duration 10               # write mock recording
+python scripts/playback.py recordings/<file>.jsonl          # replay any recording
+python scripts/export.py recordings/<file>.jsonl            # JSONL → CSV
+python scripts/test_faults.py                               # headless fault checks
+```
 
-## Run tests
+## Tests
 
 ```powershell
 pytest -q
@@ -51,60 +62,44 @@ pytest -q
 
 ```
 src/xr_hand/
-  joints.py     26 joint names, bone connectivity, dataclasses, constants
-  parser.py     187 raw floats -> HandFrame
-  validator.py  length / NaN / counter / stuck-joint / quaternion checks
-  mock.py       fake hand generator with toggleable fault modes
-  viz3d.py      matplotlib 3D skeletal viewer
+  joints.py       26 joint names + bone connectivity + dataclasses
+  parser.py       187 OSC args → HandFrame (XYZW quaternion, local positions)
+  validator.py    per-packet checks (length/NaN/zero/quat) + StreamMonitor
+  mock.py         hand-frame generator with toggleable fault modes
+  receiver.py     OSC server (port 9002, /v1/animation/kinematic/all)
+  recorder.py     JSONL record + load
+  viz3d.py        matplotlib 3D viewer (cyan left, red right, palm fill)
+  kinematics.py   forward kinematics (local transforms → world positions)
 scripts/
-  run_mock.py   wires mock -> validator -> parser -> viewer
+  run_osc.py            live viewer (real glove) + optional --record / --duration
+  run_mock.py           live viewer (in-process mock)
+  record.py             headless recorder (supports --mock)
+  playback.py           replay a .jsonl through the viewer
+  export.py             .jsonl → .csv (one row per frame, joint columns)
+  test_faults.py        headless fault-injection sanity check
+  record_and_export.ps1 the one-command pipeline (record + playback + export)
 tests/
-  test_pipeline.py
+  test_pipeline.py      parser, validator, StreamMonitor
+  test_recorder.py      record/load round-trip
 ```
 
-## Phase 2: OSC pipeline (no gloves required)
+## Wire format reference
 
-Same downstream pipeline (validator -> parser -> viewer), but the source is a
-real UDP/OSC socket instead of the in-process mock generator.
+XR Trainer sends to `127.0.0.1:9002` on address `/v1/animation/kinematic/all` with 187 args:
 
-**Two-terminal test (no hardware):**
+- **Header (5)**: `[tick_counter, frame_id, status, "Reality Glove (L/R)" str, "Reality Glove" str]`
+- **Joints (26 × 7)**: per joint `[x, y, z, qx, qy, qz, qw]`
+  - position is **parent-relative** (local space)
+  - quaternion is **XYZW**
 
-Terminal A — pretend to be XR Trainer:
-```powershell
-.\.venv\Scripts\Activate.ps1
-python scripts/mock_osc_sender.py
+Hand side is extracted from the device-label string at arg `[3]`. Header string fields are normalised to `0.0` placeholders so the downstream validator/parser see numeric data only.
+
+## CSV format
+
+One row per frame. Columns:
 ```
-
-Terminal B — run the receiver + viewer:
-```powershell
-.\.venv\Scripts\Activate.ps1
-python scripts/run_osc.py
+wall_time, iso_time, timestamp, packet_counter, hand_side, frame_id, status,
+PALM_x, PALM_y, PALM_z, PALM_qw, PALM_qx, PALM_qy, PALM_qz,
+WRIST_x, WRIST_y, WRIST_z, WRIST_qw, WRIST_qx, WRIST_qy, WRIST_qz,
+THUMB_METACARPAL_x, ... (26 joints × 7 columns)
 ```
-
-You should see the same two hands animating in 3D. Stop with Ctrl+C in
-terminal A or close the viewer window.
-
-**Inject faults over the wire** (sender side):
-```powershell
-python scripts/mock_osc_sender.py --fault wrong_length
-python scripts/mock_osc_sender.py --fault freeze_counter
-python scripts/mock_osc_sender.py --fault zero_joint
-python scripts/mock_osc_sender.py --fault random_missing
-```
-Watch the receiver terminal — same warnings/errors as the in-process mock.
-
-**Diagnose a real XR Trainer stream** (when gloves arrive):
-```powershell
-python scripts/run_osc.py --dump --no-viz
-```
-Prints one log line per OSC packet (address, arg count, first 5 values). Use
-this to confirm XR Trainer's actual address pattern and arg count before
-trusting the visualization. If the address differs from `/hand/left` and
-`/hand/right`, pass `--left-addr` / `--right-addr`. If the port differs from
-9000, pass `--port`.
-
-## What's next (not built yet)
-
-- `src/xr_hand/recorder.py` — record validated frames to JSONL, replay through
-  the same viewer.
-- Unity bridge — the `HandFrame` dataclass is already the natural wire format.

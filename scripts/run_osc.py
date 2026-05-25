@@ -11,9 +11,13 @@ address pattern and arg count match what the validator expects (187 floats).
 import argparse
 import logging
 import time
+from pathlib import Path
+
+import matplotlib.pyplot as plt
 
 from xr_hand.parser import parse_hand_message
 from xr_hand.receiver import OSCHandReceiver
+from xr_hand.recorder import FrameRecorder
 from xr_hand.validator import StreamMonitor, validate_raw_message
 from xr_hand.viz3d import HandViewer
 
@@ -34,6 +38,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
                    help="Print one log line per received packet.")
     p.add_argument("--no-viz", action="store_true",
                    help="Run validator only, no GUI window.")
+    p.add_argument("--record", type=Path, default=None,
+                   help="Also write each validated frame to this .jsonl file.")
+    p.add_argument("--duration", type=float, default=None,
+                   help="Auto-close the viewer after this many seconds.")
     return p
 
 
@@ -84,18 +92,34 @@ def main() -> None:
 
     viewer = HandViewer(title=f"XR Hand (OSC {args.host}:{args.port})")
 
+    recorder = None
+    if args.record:
+        recorder = FrameRecorder()
+        recorder.start(args.record)
+        log.info("recording to %s", args.record)
+
     def tick() -> None:
         for hand, raw in receiver.drain(max_items=16):
             ok, frame = process(hand, raw)
             if ok:
                 if frame.packet_counter % 60 == 0:
                     log.info("[%s] counter=%d", hand, frame.packet_counter)
+                if recorder is not None:
+                    recorder.record(frame)
                 viewer.update_hand(frame)
+
+    if args.duration is not None:
+        timer = viewer.fig.canvas.new_timer(interval=int(args.duration * 1000))
+        timer.add_callback(lambda: plt.close("all"))
+        timer.start()
 
     try:
         viewer.run(tick, interval_ms=33)
     finally:
         receiver.stop()
+        if recorder is not None:
+            recorder.stop()
+            log.info("saved %d frames to %s", recorder.count, args.record)
         log.info("msg_count=%s dropped=%d", receiver.msg_count, receiver.dropped)
 
 
