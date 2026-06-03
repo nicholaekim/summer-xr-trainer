@@ -71,7 +71,6 @@ class FrameRecorder:
         self._file = None
         self.path: Optional[Path] = None
         self.count = 0
-        self.seen = 0
         self._interval = 1.0 / hz if hz else None
         self._next_sample: dict[str, float] = {}
 
@@ -80,13 +79,11 @@ class FrameRecorder:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._file = open(self.path, "w", encoding="utf-8")
         self.count = 0
-        self.seen = 0
         self._next_sample = {}
 
     def record(self, frame: HandFrame) -> None:
         if self._file is None:
             raise RuntimeError("call start() before record()")
-        self.seen += 1
         now = time.time()
         if self._interval is not None:
             # throttle each hand independently so both keep the full target rate

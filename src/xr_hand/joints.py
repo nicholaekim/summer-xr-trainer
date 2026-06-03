@@ -65,14 +65,6 @@ class Joint:
     qy: float
     qz: float
 
-    @property
-    def position(self) -> Tuple[float, float, float]:
-        return (self.x, self.y, self.z)
-
-    @property
-    def quaternion(self) -> Tuple[float, float, float, float]:
-        return (self.qw, self.qx, self.qy, self.qz)
-
 
 @dataclass
 class HandFrame:
