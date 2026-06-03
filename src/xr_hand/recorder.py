@@ -66,21 +66,35 @@ def _dict_to_frame(d: dict) -> tuple[HandFrame, float]:
 
 
 class FrameRecorder:
-    def __init__(self):
+    def __init__(self, hz: Optional[float] = None):
+        """hz: downsample to this many frames/sec (e.g. 5.0). None = keep all."""
         self._file = None
         self.path: Optional[Path] = None
         self.count = 0
+        self.seen = 0
+        self._interval = 1.0 / hz if hz else None
+        self._next_sample: dict[str, float] = {}
 
     def start(self, path: str | Path) -> None:
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._file = open(self.path, "w", encoding="utf-8")
         self.count = 0
+        self.seen = 0
+        self._next_sample = {}
 
     def record(self, frame: HandFrame) -> None:
         if self._file is None:
             raise RuntimeError("call start() before record()")
-        d = _frame_to_dict(frame, wall_time=time.time())
+        self.seen += 1
+        now = time.time()
+        if self._interval is not None:
+            # throttle each hand independently so both keep the full target rate
+            if now < self._next_sample.get(frame.hand_side, 0.0):
+                return  # too soon — drop this frame to hold the target rate
+            # schedule next sample from this write; avoids a burst after a gap
+            self._next_sample[frame.hand_side] = now + self._interval
+        d = _frame_to_dict(frame, wall_time=now)
         self._file.write(json.dumps(d) + "\n")
         self._file.flush()
         self.count += 1

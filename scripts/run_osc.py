@@ -42,6 +42,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
                    help="Also write each validated frame to this .jsonl file.")
     p.add_argument("--duration", type=float, default=None,
                    help="Auto-close the viewer after this many seconds.")
+    p.add_argument("--hz", type=float, default=5.0,
+                   help="Frames saved per second when --record is set "
+                        "(default: 5). Use 0 to keep every frame.")
     return p
 
 
@@ -94,9 +97,10 @@ def main() -> None:
 
     recorder = None
     if args.record:
-        recorder = FrameRecorder()
+        recorder = FrameRecorder(hz=args.hz or None)
         recorder.start(args.record)
-        log.info("recording to %s", args.record)
+        log.info("recording to %s at %s", args.record,
+                 f"{args.hz} Hz" if args.hz else "full rate")
 
     def tick() -> None:
         for hand, raw in receiver.drain(max_items=16):

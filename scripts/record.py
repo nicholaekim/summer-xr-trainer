@@ -10,8 +10,9 @@ Recordings land in recordings/ by default.
 """
 import argparse
 import logging
+import secrets
+import string
 import time
-from datetime import datetime
 from pathlib import Path
 
 from xr_hand.mock import MockHandGenerator
@@ -29,7 +30,8 @@ log = logging.getLogger("record")
 
 
 def default_output() -> Path:
-    return Path("recordings") / f"{datetime.now():%Y%m%d_%H%M%S}.jsonl"
+    sid = "".join(secrets.choice(string.ascii_lowercase + string.digits) for _ in range(8))
+    return Path("recordings") / f"session_{sid}.jsonl"
 
 
 def main() -> None:
@@ -43,12 +45,15 @@ def main() -> None:
     p.add_argument("--output", type=Path, default=None)
     p.add_argument("--duration", type=float, default=None,
                    help="Stop after this many seconds (default: run until Ctrl+C).")
+    p.add_argument("--hz", type=float, default=5.0,
+                   help="Frames saved per second (default: 5). Use 0 to keep every frame.")
     args = p.parse_args()
 
     output = args.output or default_output()
-    recorder = FrameRecorder()
+    recorder = FrameRecorder(hz=args.hz or None)
     recorder.start(output)
-    log.info("recording to %s", output)
+    log.info("recording to %s at %s", output,
+             f"{args.hz} Hz" if args.hz else "full rate")
 
     monitors = {"left": StreamMonitor("left"), "right": StreamMonitor("right")}
 
@@ -103,6 +108,7 @@ def main() -> None:
     finally:
         recorder.stop()
         log.info("saved %d frames to %s", recorder.count, output)
+        log.info("play it back with:  python scripts/playback.py %s", output)
 
 
 if __name__ == "__main__":

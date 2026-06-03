@@ -1,5 +1,6 @@
 param(
-    [int]$Duration = 10
+    [int]$Duration = 10,
+    [double]$Hz = 5
 )
 
 $ErrorActionPreference = "Stop"
@@ -16,8 +17,8 @@ $stamp = Get-Date -Format 'yyyyMMdd_HHmmss'
 $jsonl = "recordings\realglove_$stamp.jsonl"
 $csv   = "recordings\realglove_$stamp.csv"
 
-Write-Host "`n=== 1/3  Recording $Duration s live (3D viewer auto-closes when done) ===" -ForegroundColor Cyan
-python scripts/run_osc.py --record $jsonl --duration $Duration
+Write-Host "`n=== 1/3  Recording $Duration s live at $Hz Hz (3D viewer auto-closes when done) ===" -ForegroundColor Cyan
+python scripts/run_osc.py --record $jsonl --duration $Duration --hz $Hz
 if ($LASTEXITCODE -ne 0) { throw "recording failed" }
 
 Write-Host "`n=== 2/3  Playing back (close the 3D window to continue) ===" -ForegroundColor Cyan

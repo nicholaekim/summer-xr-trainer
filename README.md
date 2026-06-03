@@ -22,10 +22,32 @@ With XR Trainer running and the glove streaming on `127.0.0.1:9002`:
 
 **One-command record + playback + export** (recommended):
 ```powershell
-.\scripts\record_and_export.ps1               # 10 s default
+.\scripts\record_and_export.ps1               # 10 s default, 5 Hz
 .\scripts\record_and_export.ps1 -Duration 30  # 30 s
+.\scripts\record_and_export.ps1 -Hz 10        # sample 10x/sec instead of 5
 ```
 Produces `recordings\realglove_YYYYMMDD_HHMMSS.jsonl` and `.csv`.
+
+**Sampling rate**: recordings are downsampled to **5 frames/sec by default**
+(`--hz 5`). The glove still streams at ~60 Hz; only the saved frames are
+throttled, and each one keeps its exact `wall_time` / `iso_time` / `timestamp`.
+Pass `--hz 0` (or `-Hz 0`) to keep every frame.
+
+**Record a session** (starts immediately, stop with Ctrl+C):
+```powershell
+python scripts/record.py
+```
+Saves to `recordings\session_<id>.jsonl` and prints the playback command when
+you stop. Add `--mock` to record without the glove.
+
+**Scrub a session like a video**:
+```powershell
+python scripts/playback.py recordings\session_<id>.jsonl
+```
+3D hand on the left, per-joint data table on the right. Drag the slider (or use
+the left/right arrow keys) to move back and forth; the data panel stays aligned
+to the frame you're on and highlights the joint that moved the most. The
+Play/Pause button auto-advances at the recorded rate.
 
 **Just the live viewer** (no recording):
 ```powershell
@@ -47,7 +69,7 @@ python scripts/run_osc.py --dump --no-viz
 ```powershell
 python scripts/run_mock.py                                  # animated mock viewer
 python scripts/record.py --mock --duration 10               # write mock recording
-python scripts/playback.py recordings/<file>.jsonl          # replay any recording
+python scripts/playback.py recordings/<file>.jsonl          # scrub any recording
 python scripts/export.py recordings/<file>.jsonl            # JSONL → CSV
 python scripts/test_faults.py                               # headless fault checks
 ```
@@ -69,12 +91,13 @@ src/xr_hand/
   receiver.py     OSC server (port 9002, /v1/animation/kinematic/all)
   recorder.py     JSONL record + load
   viz3d.py        matplotlib 3D viewer (cyan left, red right, palm fill)
+  playback_viewer.py  scrubbable viewer: 3D hand + per-joint data panel
   kinematics.py   forward kinematics (local transforms → world positions)
 scripts/
   run_osc.py            live viewer (real glove) + optional --record / --duration
   run_mock.py           live viewer (in-process mock)
   record.py             headless recorder (supports --mock)
-  playback.py           replay a .jsonl through the viewer
+  playback.py           scrub a .jsonl session (slider + per-joint data panel)
   export.py             .jsonl → .csv (one row per frame, joint columns)
   test_faults.py        headless fault-injection sanity check
   record_and_export.ps1 the one-command pipeline (record + playback + export)
