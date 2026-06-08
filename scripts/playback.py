@@ -39,7 +39,11 @@ def main() -> None:
         raise SystemExit("recording is empty")
 
     log.info("loaded %d frames from %s", len(frames_with_time), args.input)
-    viewer = PlaybackViewer(frames_with_time, title=f"Playback: {args.input.name}")
+    viewer = PlaybackViewer(
+        frames_with_time,
+        title=f"Playback: {args.input.name}",
+        source_path=args.input,
+    )
     viewer.show()
 
 

@@ -7,13 +7,15 @@ you're parked on, and the joint that moved the most into this frame is
 highlighted — so the numbers stay aligned with whatever the hand is doing.
 """
 from datetime import datetime
+from pathlib import Path
 from typing import List, Optional, Tuple
 
 import matplotlib.pyplot as plt
 from matplotlib.gridspec import GridSpec
-from matplotlib.widgets import Button, Slider
+from matplotlib.widgets import Button, RangeSlider, Slider
 from mpl_toolkits.mplot3d.art3d import Path3DCollection, Poly3DCollection
 
+from .export_xlsx import write_workbook
 from .joints import BONES, HandFrame, JOINT_COUNT, JOINT_NAMES
 from .kinematics import forward_kinematics
 from .viz3d import _HAND_COLORS, FINGERTIP_IDX, PALM_POLYGON_IDX
@@ -25,6 +27,7 @@ class PlaybackViewer:
         frames_with_time: List[Tuple[HandFrame, float]],
         title: str = "Playback",
         view_radius: float = 0.22,
+        source_path: Optional[Path] = None,
     ):
         if not frames_with_time:
             raise ValueError("no frames to play back")
@@ -33,6 +36,10 @@ class PlaybackViewer:
         self.times = [t for _, t in frames_with_time]
         self.n = len(self.frames)
         self.t0 = self.times[0]
+        self.source_path = Path(source_path) if source_path else None
+        # selected window [lo, hi] (frame indices); starts as the whole clip
+        self._lo = 0
+        self._hi = self.n - 1
 
         # For any scrub index i, which is the latest left/right frame at or
         # before i? (so both hands stay on screen even though packets alternate)
@@ -49,6 +56,7 @@ class PlaybackViewer:
         self._timer.add_callback(self._on_play_tick)
 
         self._draw_index(0)
+        self._on_range((self._lo, self._hi))
 
     # --- precompute helpers -------------------------------------------
     def _build_last_index(self, hand: str) -> List[Optional[int]]:
@@ -85,12 +93,12 @@ class PlaybackViewer:
 
     # --- figure construction ------------------------------------------
     def _build_figure(self, title: str, view_radius: float) -> None:
-        self.fig = plt.figure(figsize=(15.5, 8), facecolor="black")
+        self.fig = plt.figure(figsize=(15.5, 8.5), facecolor="black")
         self.fig.suptitle(title, color="white", fontsize=12)
         gs = GridSpec(
-            2, 2, figure=self.fig,
-            width_ratios=[1.0, 1.3], height_ratios=[1.0, 0.08],
-            left=0.02, right=0.98, top=0.92, bottom=0.10, wspace=0.05, hspace=0.18,
+            1, 2, figure=self.fig,
+            width_ratios=[1.0, 1.3],
+            left=0.02, right=0.98, top=0.92, bottom=0.26, wspace=0.05,
         )
 
         # 3D hand
@@ -167,21 +175,47 @@ class PlaybackViewer:
                 fontsize=8, va="center", ha="left", transform=self.tax.transAxes,
             ))
 
-        # Slider
-        self.sax = self.fig.add_subplot(gs[1, :], facecolor="#202028")
+        rmax = max(1, self.n - 1)
+
+        # Scrub slider (move through frames one at a time)
+        self.sax = self.fig.add_axes([0.10, 0.185, 0.82, 0.025], facecolor="#202028")
         self.slider = Slider(
-            self.sax, "Frame", 0, self.n - 1, valinit=0, valstep=1,
-            color="#22e0e0",
+            self.sax, "Frame", 0, rmax, valinit=0, valstep=1, color="#22e0e0",
         )
         self.slider.label.set_color("white")
         self.slider.valtext.set_color("white")
         self.slider.on_changed(self._on_slider)
 
+        # Range slider (select a window for play + export)
+        self.rax = self.fig.add_axes([0.10, 0.125, 0.82, 0.025], facecolor="#202028")
+        self.range = RangeSlider(
+            self.rax, "Select", 0, rmax, valinit=(0, rmax), valstep=1,
+            color="#ffe14d",
+        )
+        self.range.label.set_color("#ffe14d")
+        self.range.valtext.set_color("#ffe14d")
+        self.range.on_changed(self._on_range)
+
         # Play / pause button
-        self.bax = self.fig.add_axes([0.02, 0.01, 0.08, 0.05])
+        self.bax = self.fig.add_axes([0.10, 0.04, 0.08, 0.05])
         self.play_btn = Button(self.bax, "Play", color="#2a2a35", hovercolor="#3a3a48")
         self.play_btn.label.set_color("white")
         self.play_btn.on_clicked(self._on_play_clicked)
+
+        # Export selection button
+        self.eax = self.fig.add_axes([0.19, 0.04, 0.16, 0.05])
+        self.export_btn = Button(
+            self.eax, "Export selection → Excel",
+            color="#2a3a2a", hovercolor="#3a4a3a",
+        )
+        self.export_btn.label.set_color("white")
+        self.export_btn.on_clicked(self._on_export)
+
+        # Selection / status readout
+        self._sel_info = self.fig.text(
+            0.37, 0.065, "", color="#ffe14d", family="monospace",
+            fontsize=10, va="center", ha="left",
+        )
 
         self.fig.canvas.mpl_connect("key_press_event", self._on_key)
 
@@ -324,18 +358,89 @@ class PlaybackViewer:
         self._playing = not self._playing
         self.play_btn.label.set_text("Pause" if self._playing else "Play")
         if self._playing:
+            # start from the window's beginning if we're outside it
+            cur = int(self.slider.val)
+            if cur < self._lo or cur >= self._hi:
+                self.slider.set_val(self._lo)
             self._timer.start()
         else:
             self._timer.stop()
 
     def _on_play_tick(self) -> None:
         cur = int(self.slider.val)
-        if cur >= self.n - 1:
+        if cur >= self._hi:  # stop at the end of the selected window
             self._playing = False
             self.play_btn.label.set_text("Play")
             self._timer.stop()
             return
         self.slider.set_val(cur + 1)
+
+    # --- time-range selection + export --------------------------------
+    def _fmt_elapsed(self, seconds: float) -> str:
+        m, s = divmod(seconds, 60)
+        return f"{int(m)}:{s:06.3f}"
+
+    def _fmt_clock(self, wall: float) -> str:
+        return datetime.fromtimestamp(wall).strftime("%H:%M:%S.") + \
+            f"{int((wall % 1) * 1000):03d}"
+
+    def _on_range(self, val) -> None:
+        self._lo, self._hi = int(val[0]), int(val[1])
+        lo_el = self._fmt_elapsed(self.times[self._lo] - self.t0)
+        hi_el = self._fmt_elapsed(self.times[self._hi] - self.t0)
+        nframes = self._hi - self._lo + 1
+        self._sel_info.set_text(
+            f"window  {lo_el}-{hi_el}   "
+            f"(clock {self._fmt_clock(self.times[self._lo])} - "
+            f"{self._fmt_clock(self.times[self._hi])})   {nframes} frames"
+        )
+        self.fig.canvas.draw_idle()
+
+    def _export_path(self) -> Path:
+        lo_s = self.times[self._lo] - self.t0
+        hi_s = self.times[self._hi] - self.t0
+        tag = f"_{lo_s:.1f}-{hi_s:.1f}s"
+        if self.source_path is not None:
+            return self.source_path.with_name(self.source_path.stem + tag + ".xlsx")
+        return Path("recordings") / f"selection{tag}.xlsx"
+
+    def _export_rows(self):
+        """One tidy row per (frame x hand x joint) over the selected window."""
+        for i in range(self._lo, self._hi + 1):
+            fr = self.frames[i]
+            world = self._fk(i)
+            hot = self._moved_joints(i)
+            elapsed = self.times[i] - self.t0
+            clock = self._fmt_clock(self.times[i])
+            for k in range(JOINT_COUNT):
+                wx, wy, wz = world[k] if k < len(world) else (0.0, 0.0, 0.0)
+                j = fr.joints[k] if k < len(fr.joints) else None
+                yield [
+                    i + 1, round(elapsed, 3), clock, fr.hand_side, JOINT_NAMES[k],
+                    wx, wy, wz,
+                    j.qw if j else 0.0, j.qx if j else 0.0,
+                    j.qy if j else 0.0, j.qz if j else 0.0,
+                    "yes" if k in hot else "",
+                ]
+
+    def _on_export(self, _event) -> None:
+        out = self._export_path()
+        nframes = self._hi - self._lo + 1
+        summary = [
+            ("Source", self.source_path.name if self.source_path else "(live)"),
+            ("Window (elapsed)",
+             f"{self._fmt_elapsed(self.times[self._lo] - self.t0)} - "
+             f"{self._fmt_elapsed(self.times[self._hi] - self.t0)}"),
+            ("Window (clock)",
+             f"{self._fmt_clock(self.times[self._lo])} - "
+             f"{self._fmt_clock(self.times[self._hi])}"),
+            ("Frames", nframes),
+            ("Joints per hand", JOINT_COUNT),
+            ("Positions", "world space (metres)"),
+        ]
+        write_workbook(out, summary=summary, rows=self._export_rows())
+        self._sel_info.set_text(f"saved {nframes} frames -> {out.name}")
+        self.fig.canvas.draw_idle()
 
     def show(self) -> None:
         plt.show()

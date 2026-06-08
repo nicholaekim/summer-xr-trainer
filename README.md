@@ -44,10 +44,20 @@ you stop. Add `--mock` to record without the glove.
 ```powershell
 python scripts/playback.py recordings\session_<id>.jsonl
 ```
-3D hand on the left, per-joint data table on the right. Drag the slider (or use
-the left/right arrow keys) to move back and forth; the data panel stays aligned
-to the frame you're on and highlights the joint that moved the most. The
-Play/Pause button auto-advances at the recorded rate.
+3D hand on the left, both hands' per-joint data (world positions) on the right.
+
+- **Frame** slider (or left/right arrow keys): scrub one frame at a time.
+- **Select** slider: pick a time window (e.g. 1:30 to 1:35). The readout shows
+  the window in both elapsed (`m:ss.mmm`) and wall-clock time, plus frame count.
+- **Play/Pause**: auto-advances within the selected window.
+- **Export selection → Excel**: writes just the frames in the window to a
+  formatted `.xlsx` next to the recording (named with the time range). It has a
+  **Summary** sheet (source, window, frame count) and a **Joint data** sheet
+  laid out as a tidy table — one row per frame × hand × joint with world XYZ +
+  rotation quaternion, a frozen/filterable header, per-hand colour, and a
+  `moved` flag marking the joints that moved into each frame.
+
+The data panel highlights the joints that moved into each frame, per hand.
 
 **Just the live viewer** (no recording):
 ```powershell
