@@ -1,5 +1,5 @@
 # XR Trainer / StretchSense glove pipeline
-
+# by Nicholas Kim. All rights reserved.
 Real-time pipeline: **glove → XR Trainer → OSC (UDP) → validate → parse → 3D viz → record → CSV export**.
 
 26 joints per hand (OpenXR `XR_HAND_JOINT` layout), each with local position + quaternion, captured at ~60 Hz.
