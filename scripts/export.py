@@ -5,6 +5,7 @@ Each row is one frame. Columns:
   iso_time          human-readable local time, ms precision
   timestamp         XR Trainer's internal tick counter
   packet_counter, hand_side, frame_id, status
+  pose, take        gesture label + repetition (empty for unlabeled sessions)
   <JOINT>_x, _y, _z, _qw, _qx, _qy, _qz  (26 joints x 7 = 182 columns)
 
 Positions and quaternions are kept in the device's native local frame —
@@ -41,7 +42,7 @@ def main() -> None:
 
     header = [
         "wall_time", "iso_time", "timestamp", "packet_counter",
-        "hand_side", "frame_id", "status",
+        "hand_side", "frame_id", "status", "pose", "take",
     ]
     for name in JOINT_NAMES:
         for suffix in ("x", "y", "z", "qw", "qx", "qy", "qz"):
@@ -67,6 +68,7 @@ def main() -> None:
             row = [
                 d["wall_time"], iso, d["timestamp"], d["packet_counter"],
                 d["hand_side"], d["frame_id"], d["status"],
+                d.get("pose", ""), d.get("take", ""),
             ]
             for j in d["joints"]:
                 row.extend([j["x"], j["y"], j["z"],

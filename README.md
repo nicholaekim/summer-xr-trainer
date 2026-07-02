@@ -7,7 +7,7 @@ Real-time pipeline: **glove → XR Trainer → OSC (UDP) → validate → parse 
 ## Install (Windows / PowerShell)
 
 ```powershell
-cd "C:\Users\nkim2\Desktop\xr trainer"
+cd "C:\Users\nkim2\OneDrive\Desktop\xr trainer\summer-xr-trainer"
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install -e ".[dev]"
@@ -33,7 +33,26 @@ Produces `recordings\realglove_YYYYMMDD_HHMMSS.jsonl` and `.csv`.
 throttled, and each one keeps its exact `wall_time` / `iso_time` / `timestamp`.
 Pass `--hz 0` (or `-Hz 0`) to keep every frame.
 
-**Record a session** (starts immediately, stop with Ctrl+C):
+**Record the pose set (guided, hands-free)** — for the finger-pose
+feasibility tests:
+```powershell
+python scripts/record_poses.py                          # 6 poses x 3 takes x 5 s
+python scripts/record_poses.py --poses fist,peace --takes 2 --duration 4
+python scripts/record_poses.py --mock --takes 1 --duration 2 --prep 2   # dry run
+```
+Waits until valid glove packets arrive, then for each pose: announces it,
+counts down with beeps, records, moves on — no keyboard needed while the
+glove is on. Default poses: `open_palm, fist, index_point, thumbs_up,
+peace, pinch`. Each take is its own file in `recordings\poses\`
+(e.g. `fist_left_take2_20260701_154212.jsonl`) and every frame carries
+`"pose"` / `"take"` fields. Ctrl+C keeps the takes recorded so far.
+
+**Record a single labeled take**:
+```powershell
+python scripts/record.py --pose fist --take 2 --duration 5
+```
+
+**Record a session** (unlabeled; starts immediately, stop with Ctrl+C):
 ```powershell
 python scripts/record.py
 ```
@@ -106,7 +125,8 @@ src/xr_hand/
 scripts/
   run_osc.py            live viewer (real glove) + optional --record / --duration
   run_mock.py           live viewer (in-process mock)
-  record.py             headless recorder (supports --mock)
+  record.py             headless recorder (supports --mock, --pose/--take labels)
+  record_poses.py       guided hands-free pose session (countdown + beeps per take)
   playback.py           scrub a .jsonl session (slider + per-joint data panel)
   export.py             .jsonl → .csv (one row per frame, joint columns)
   test_faults.py        headless fault-injection sanity check
@@ -132,6 +152,7 @@ Hand side is extracted from the device-label string at arg `[3]`. Header string 
 One row per frame. Columns:
 ```
 wall_time, iso_time, timestamp, packet_counter, hand_side, frame_id, status,
+pose, take,
 PALM_x, PALM_y, PALM_z, PALM_qw, PALM_qx, PALM_qy, PALM_qz,
 WRIST_x, WRIST_y, WRIST_z, WRIST_qw, WRIST_qx, WRIST_qy, WRIST_qz,
 THUMB_METACARPAL_x, ... (26 joints × 7 columns)

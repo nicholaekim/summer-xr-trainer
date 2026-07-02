@@ -3,10 +3,15 @@
 Mock mode (no hardware):
     python scripts/record.py --mock --duration 10
 
-Live OSC mode (XR Trainer connected):
-    python scripts/record.py --port 9000
+Live OSC mode (XR Trainer connected, default port 9002):
+    python scripts/record.py
 
-Recordings land in recordings/ by default.
+Labeled pose take (stamps "pose"/"take" into every frame, names the file
+after the pose, and lands it in recordings/poses/):
+    python scripts/record.py --pose fist --take 2 --duration 5
+
+Unlabeled recordings land in recordings/ by default.
+For a guided multi-pose session, use scripts/record_poses.py instead.
 """
 import argparse
 import logging
@@ -18,7 +23,12 @@ from pathlib import Path
 from xr_hand.mock import MockHandGenerator
 from xr_hand.parser import parse_hand_message
 from xr_hand.receiver import OSCHandReceiver
-from xr_hand.recorder import FrameRecorder
+from xr_hand.recorder import (
+    FrameRecorder,
+    finalize_pose_name,
+    pose_filename,
+    slugify,
+)
 from xr_hand.validator import StreamMonitor, validate_raw_message
 
 logging.basicConfig(
@@ -47,13 +57,28 @@ def main() -> None:
                    help="Stop after this many seconds (default: run until Ctrl+C).")
     p.add_argument("--hz", type=float, default=5.0,
                    help="Frames saved per second (default: 5). Use 0 to keep every frame.")
+    p.add_argument("--pose", default=None,
+                   help="Gesture label (e.g. fist). Stamped into every frame and "
+                        "used to name the file under recordings/poses/.")
+    p.add_argument("--take", type=int, default=1,
+                   help="Repetition number for --pose recordings (default: 1).")
     args = p.parse_args()
 
-    output = args.output or default_output()
-    recorder = FrameRecorder(hz=args.hz or None)
+    if args.output:
+        output = args.output
+    elif args.pose:
+        output = Path("recordings") / "poses" / pose_filename(args.pose, args.take)
+    else:
+        output = default_output()
+    recorder = FrameRecorder(
+        hz=args.hz or None,
+        pose=slugify(args.pose) if args.pose else None,
+        take=args.take if args.pose else None,
+    )
     recorder.start(output)
-    log.info("recording to %s at %s", output,
-             f"{args.hz} Hz" if args.hz else "full rate")
+    log.info("recording to %s at %s%s", output,
+             f"{args.hz} Hz" if args.hz else "full rate",
+             f" (pose={slugify(args.pose)}, take {args.take})" if args.pose else "")
 
     monitors = {"left": StreamMonitor("left"), "right": StreamMonitor("right")}
 
@@ -107,6 +132,8 @@ def main() -> None:
         pass
     finally:
         recorder.stop()
+        if args.pose and not args.output and recorder.count > 0:
+            output = finalize_pose_name(output, recorder.hands_seen)
         log.info("saved %d frames to %s", recorder.count, output)
         log.info("play it back with:  python scripts/playback.py %s", output)
 

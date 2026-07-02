@@ -1,10 +1,17 @@
-"""Round-trip tests for FrameRecorder."""
+"""Round-trip tests for FrameRecorder + pose-labeling helpers."""
+import json
 import tempfile
 from pathlib import Path
 
 from xr_hand.mock import MockHandGenerator
 from xr_hand.parser import parse_hand_message
-from xr_hand.recorder import FrameRecorder
+from xr_hand.recorder import (
+    FrameRecorder,
+    finalize_pose_name,
+    hand_tag,
+    pose_filename,
+    slugify,
+)
 from xr_hand.validator import validate_raw_message
 
 
@@ -81,3 +88,64 @@ def test_wall_times_are_monotonic():
 
     wall_times = [wt for _, wt in FrameRecorder.load(path)]
     assert all(b >= a for a, b in zip(wall_times, wall_times[1:]))
+
+
+def test_pose_and_take_stamped_into_every_frame():
+    frames = _make_frames("left", 5)
+    with tempfile.NamedTemporaryFile(suffix=".jsonl", delete=False, mode="w") as f:
+        path = Path(f.name)
+
+    rec = FrameRecorder(pose="fist", take=2)
+    rec.start(path)
+    for frame in frames:
+        rec.record(frame)
+    rec.stop()
+    assert rec.hands_seen == {"left"}
+
+    lines = [json.loads(l) for l in path.read_text().splitlines()]
+    assert len(lines) == 5
+    assert all(d["pose"] == "fist" and d["take"] == 2 for d in lines)
+
+    # labeled files must still load through the normal path
+    loaded = [frame for frame, _ in FrameRecorder.load(path)]
+    assert len(loaded) == 5
+    assert loaded[0].hand_side == "left"
+
+
+def test_unlabeled_recording_has_no_pose_keys():
+    frames = _make_frames("right", 3)
+    with tempfile.NamedTemporaryFile(suffix=".jsonl", delete=False, mode="w") as f:
+        path = Path(f.name)
+
+    rec = FrameRecorder()
+    rec.start(path)
+    for frame in frames:
+        rec.record(frame)
+    rec.stop()
+
+    lines = [json.loads(l) for l in path.read_text().splitlines()]
+    assert all("pose" not in d and "take" not in d for d in lines)
+
+
+def test_hand_tag():
+    assert hand_tag({"left"}) == "left"
+    assert hand_tag({"right"}) == "right"
+    assert hand_tag({"left", "right"}) == "both"
+    assert hand_tag(set()) == "nohand"
+
+
+def test_slugify():
+    assert slugify("Open Palm!") == "open_palm"
+    assert slugify("thumbs-up") == "thumbs_up"
+    assert slugify("  fist  ") == "fist"
+
+
+def test_finalize_pose_name_inserts_hand():
+    with tempfile.TemporaryDirectory() as tmp:
+        name = pose_filename("fist", 1)
+        assert name.startswith("fist_take1_") and name.endswith(".jsonl")
+        path = Path(tmp) / name
+        path.write_text("{}\n")
+        final = finalize_pose_name(path, {"left"})
+        assert final.name.startswith("fist_left_take1_")
+        assert final.exists() and not path.exists()
