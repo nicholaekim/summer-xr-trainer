@@ -37,6 +37,11 @@ _HAND_COLORS = {
     "right": {"bone": "#ff5b5b", "joint": "#ff5b5b", "tip": "#ffc0c0", "palm": "#400a14"},
 }
 
+# Where each hand's wrist is pinned on screen (metres). With the default
+# camera (azim=90) +x lands on the viewer's LEFT, so left gets +x and right
+# gets -x — left hand on the left of the screen, as you'd see your own hands.
+_HAND_ANCHOR_X = {"left": 0.12, "right": -0.12}
+
 
 class HandViewer:
     def __init__(self, title: str = "XR Hand", view_radius: float = 0.22):
@@ -106,10 +111,16 @@ class HandViewer:
         hand = frame.hand_side
         self._ensure_hand(hand)
         positions = forward_kinematics(frame)
+        # Re-anchor the wrist to a fixed per-hand x: the real glove streams no
+        # world position (both roots arrive at the origin), so without this
+        # left and right draw on top of each other. Display-only — recorded
+        # frames keep the stream's own coordinates.
+        wx, wy, wz = positions[JOINT_INDEX["WRIST"]]
+        anchor_x = _HAND_ANCHOR_X.get(hand, 0.0)
         # Flip Z so fingers point up in matplotlib's default coordinate system.
-        xs = [p[0] for p in positions]
-        ys = [p[1] for p in positions]
-        zs = [-p[2] for p in positions]
+        xs = [p[0] - wx + anchor_x for p in positions]
+        ys = [p[1] - wy for p in positions]
+        zs = [wz - p[2] for p in positions]
 
         self._scatters[hand]._offsets3d = (xs, ys, zs)
         self._tip_scatters[hand]._offsets3d = (

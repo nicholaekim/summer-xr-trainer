@@ -140,6 +140,38 @@ def test_slugify():
     assert slugify("  fist  ") == "fist"
 
 
+def test_keypoints21_mapping():
+    from xr_hand.joints import JOINT_NAMES
+    from xr_hand.keypoints21 import (
+        MP21_NAMES,
+        MP21_TO_OPENXR,
+        MP21_TO_OPENXR_IDX,
+        frame_to_keypoints21,
+    )
+
+    assert len(MP21_NAMES) == 21
+    assert len(set(MP21_TO_OPENXR_IDX)) == 21  # no duplicate source joints
+    # spot-check anatomical landmarks
+    pairs = dict(MP21_TO_OPENXR)
+    assert pairs["WRIST"] == "WRIST"
+    assert pairs["THUMB_CMC"] == "THUMB_METACARPAL"
+    assert pairs["INDEX_FINGER_MCP"] == "INDEX_PROXIMAL"
+    assert pairs["PINKY_TIP"] == "LITTLE_TIP"
+    # dropped joints are exactly PALM + the four non-thumb metacarpals
+    used = {xr for _, xr in MP21_TO_OPENXR}
+    dropped = set(JOINT_NAMES) - used
+    assert dropped == {"PALM", "INDEX_METACARPAL", "MIDDLE_METACARPAL",
+                       "RING_METACARPAL", "LITTLE_METACARPAL"}
+
+    frame = _make_frames("right", 1)[0]
+    pts = frame_to_keypoints21(frame)
+    assert len(pts) == 21
+    assert pts[0] == (0.0, 0.0, 0.0)  # wrist-centred
+    # fingertips must not collapse onto the wrist
+    assert all(abs(pts[i][0]) + abs(pts[i][1]) + abs(pts[i][2]) > 0.01
+               for i in (4, 8, 12, 16, 20))
+
+
 def test_finalize_pose_name_inserts_hand():
     with tempfile.TemporaryDirectory() as tmp:
         name = pose_filename("fist", 1)

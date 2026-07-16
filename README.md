@@ -52,6 +52,23 @@ peace, pinch`. Each take is its own file in `recordings\poses\`
 python scripts/record.py --pose fist --take 2 --duration 5
 ```
 
+**Convert pose recordings to the 21-keypoint layout** (MediaPipe /
+Ultralytics standard, for comparison with image hand-pose datasets):
+```powershell
+python scripts/export_keypoints21.py recordings\poses
+```
+Writes `keypoints21_frames.csv` (every frame) and `keypoints21_summary.csv`
+(one representative frame per pose x hand — the recorded frame closest to
+the pose average, so bone lengths stay rigid). Wrist-centred world XYZ in
+metres; the 26 -> 21 joint mapping lives in `src/xr_hand/keypoints21.py`.
+
+**Pose separability report** (fingertip-extension table + leave-one-out
+nearest-centroid classification over the recorded takes):
+```powershell
+python scripts/analyze_poses.py                    # print report
+python scripts/analyze_poses.py recordings\poses --write   # also update REPORT.txt
+```
+
 **Record a session** (unlabeled; starts immediately, stop with Ctrl+C):
 ```powershell
 python scripts/record.py
@@ -122,11 +139,13 @@ src/xr_hand/
   viz3d.py        matplotlib 3D viewer (cyan left, red right, palm fill)
   playback_viewer.py  scrubbable viewer: 3D hand + per-joint data panel
   kinematics.py   forward kinematics (local transforms → world positions)
+  keypoints21.py  26 OpenXR joints → 21-keypoint (MediaPipe) mapping
 scripts/
   run_osc.py            live viewer (real glove) + optional --record / --duration
   run_mock.py           live viewer (in-process mock)
   record.py             headless recorder (supports --mock, --pose/--take labels)
   record_poses.py       guided hands-free pose session (countdown + beeps per take)
+  analyze_poses.py      pose separability report (extension table + LOO classification)
   playback.py           scrub a .jsonl session (slider + per-joint data panel)
   export.py             .jsonl → .csv (one row per frame, joint columns)
   test_faults.py        headless fault-injection sanity check

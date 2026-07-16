@@ -119,6 +119,8 @@ def main() -> None:
 
     try:
         viewer.run(tick, interval_ms=33)
+    except KeyboardInterrupt:
+        pass
     finally:
         receiver.stop()
         if recorder is not None:
