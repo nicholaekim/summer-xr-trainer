@@ -1,3 +1,9 @@
+> **Merged and frozen (2026-09-16).** This repository has been merged, with its
+> full history, into
+> https://github.com/nicholaekim/dual-glove-and-camera-xr-train-glove under
+> `archive/summer-xr-trainer/`. All further work (glove, camera, Ultraleap
+> Stereo IR 170) happens there. Nothing here is updated any more.
+
 # XR Trainer / StretchSense glove pipeline
 # by Nicholas Kim. All rights reserved.
 Real-time pipeline: **glove → XR Trainer → OSC (UDP) → validate → parse → 3D viz → record → CSV export**.
